@@ -1,7 +1,7 @@
 # api/index.py — fixed for Vercel 500s; Redis optional (falls back to memory). /remain needs no key.
 
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import asyncio
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -25,7 +25,6 @@ try:
     REDIS_URL = os.getenv("REDIS_URL", "").strip()
     if REDIS_URL:
         r = redis.from_url(REDIS_URL, decode_responses=True, ssl=REDIS_URL.startswith("rediss://"))
-        # quick probe; if this fails we fall back to in-memory
         r.ping()
         USE_REDIS = True
 except Exception:
@@ -38,7 +37,6 @@ app = Flask(__name__)
 KEY_LIMIT = 500
 GLOBAL_KEY = "rfg_gamer"
 
-# in-memory fallback store: key -> [used_count, last_reset_ts]
 key_tracker = defaultdict(lambda: [0, time.time()])
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,7 +61,6 @@ def usage_key(api_key: str) -> str:
 def get_used_count(api_key: str) -> int:
     if USE_REDIS and r is not None:
         return int(r.get(usage_key(api_key)) or 0)
-    # in-memory fallback with daily reset
     today_midnight = get_today_midnight_timestamp()
     used, last_reset = key_tracker[api_key]
     if last_reset < today_midnight:
@@ -72,7 +69,6 @@ def get_used_count(api_key: str) -> int:
     return int(used)
 
 def consume_one(api_key: str) -> int:
-    """Increment usage by 1 and return the new used count."""
     if USE_REDIS and r is not None:
         k = usage_key(api_key)
         pipe = r.pipeline()
@@ -80,7 +76,6 @@ def consume_one(api_key: str) -> int:
         pipe.expire(k, seconds_until_midnight_utc(), nx=True)
         used, _ = pipe.execute()
         return int(used)
-    # in-memory fallback
     used = get_used_count(api_key) + 1
     key_tracker[api_key][0] = used
     key_tracker[api_key][1] = time.time()
@@ -170,13 +165,67 @@ def make_request(encrypted, server_name, token):
     except Exception:
         return None
 
-# === Main / Home Route ===
+# === Styled Home Page (2nd Image Design) ===
 @app.get("/")
 def home():
-    return jsonify({
-        "status": "success",
-        "message": "RFG GAMER API is Running 24/7h 🚀⚡"
-    })
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>RFG GAMER API</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                min-height: 85vh;
+                margin: 0;
+                padding: 20px;
+                text-align: center;
+                background-color: #ffffff;
+            }
+            .title {
+                color: #2ecc71;
+                font-size: 26px;
+                font-weight: 700;
+                max-width: 90%;
+                margin-bottom: 25px;
+                line-height: 1.4;
+            }
+            .credit {
+                font-size: 20px;
+                margin: 6px 0;
+                color: #000000;
+            }
+            .credit span {
+                font-weight: 400;
+            }
+            .instruction {
+                color: #7f8c8d;
+                font-size: 19px;
+                font-weight: 600;
+                max-width: 550px;
+                margin-top: 30px;
+                line-height: 1.5;
+                word-break: break-word;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="title">🎨 RFG GAMER API is Running 24/7h 🚀⚡</div>
+        <div class="credit"><strong>Credit:</strong> @RFG_GAMER</div>
+        <div class="credit"><strong>Powered By:</strong> @RFG_GAMER</div>
+        <div class="instruction">
+            Use /like?uid={UID}&server_name={SERVER}&key={KEY} And /remain endpoint to get data.
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html_content)
 
 # === Public remain endpoint (no key required) ===
 @app.get("/remain")
@@ -202,7 +251,6 @@ def handle_requests():
     if not uid or not server_name:
         return jsonify({"error": "UID and server_name are required"}), 400
 
-    # Pre-check quota
     used_now = get_used_count(api_key)
     if used_now >= KEY_LIMIT:
         return jsonify({
@@ -211,7 +259,6 @@ def handle_requests():
             "remains": f"(0/{KEY_LIMIT})"
         }), 429
 
-    # Prepare requests
     try:
         tokens = load_tokens(server_name)
         token = tokens[0]["token"]
@@ -231,7 +278,6 @@ def handle_requests():
 
     before_like = int(account_info.get("Likes", 0))
 
-    # Like endpoint per region
     if server_name == "IND":
         url = "https://client.ind.freefiremobile.com/LikeProfile"
     elif server_name in {"BR", "US", "SAC", "NA"}:
@@ -257,7 +303,6 @@ def handle_requests():
     like_given = after_like - before_like
     status = 1 if like_given != 0 else 2
 
-    # Consume 1 quota for any valid result
     new_used = consume_one(api_key)
     if new_used > KEY_LIMIT:
         if USE_REDIS and r is not None:
@@ -282,5 +327,5 @@ def handle_requests():
 
 if __name__ == "__main__":
     HOST = os.getenv("HOST", "0.0.0.0")
-    PORT = int(os.getenv("PORT", 6291))
+    PORT = int(os.getenv("PORT", 6292))
     app.run(host=HOST, port=PORT, debug=True, use_reloader=False)
