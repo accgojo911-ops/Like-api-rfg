@@ -148,7 +148,7 @@ def make_request(encrypted, server_name, token):
         url = "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
     else:
         url = "https://clientbp.ggpolarbear.com/GetPlayerPersonalShow"
-'
+
     edata = bytes.fromhex(encrypted)
     headers = {
         'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
@@ -161,9 +161,9 @@ def make_request(encrypted, server_name, token):
         'X-GA': "v1 1",
         'ReleaseVersion': "OB54"
     }
-    resp = requests.post(url, data=edata, headers=headers, verify=False, timeout=30)
-    binary = bytes.fromhex(resp.content.hex())
     try:
+        resp = requests.post(url, data=edata, headers=headers, verify=False, timeout=30)
+        binary = bytes.fromhex(resp.content.hex())
         obj = like_count_pb2.Info()
         obj.ParseFromString(binary)
         return obj
@@ -204,13 +204,24 @@ def handle_requests():
         }), 429
 
     # Prepare requests
-    tokens = load_tokens(server_name)
-    token = tokens[0]["token"]
+    try:
+        tokens = load_tokens(server_name)
+        token = tokens[0]["token"]
+    except Exception:
+        return jsonify({"error": f"Failed to load tokens for server: {server_name}"}), 400
+
     encrypted = enc(uid)
 
     before = make_request(encrypted, server_name, token)
+    if before is None:
+        return jsonify({"error": "Failed to fetch player info from server (Before)"}), 500
+
     js = json.loads(MessageToJson(before))
-    before_like = int(js["AccountInfo"].get("Likes", 0))
+    account_info = js.get("AccountInfo")
+    if not account_info:
+        return jsonify({"error": "Invalid response or Player UID not found"}), 404
+
+    before_like = int(account_info.get("Likes", 0))
 
     # Like endpoint per region
     if server_name == "IND":
@@ -218,23 +229,29 @@ def handle_requests():
     elif server_name in {"BR", "US", "SAC", "NA"}:
         url = "https://client.us.freefiremobile.com/LikeProfile"
     else:
-        url = "https://clientbp.ggpolarbear.com//LikeProfile"
+        url = "https://clientbp.ggpolarbear.com/LikeProfile"
 
     asyncio.run(send_multiple_requests(uid, server_name, url))
 
     after = make_request(encrypted, server_name, token)
-    js = json.loads(MessageToJson(after))
-    after_like = int(js["AccountInfo"]["Likes"])
-    id_ = int(js["AccountInfo"]["UID"])
-    name = str(js["AccountInfo"]["PlayerNickname"])
+    if after is None:
+        return jsonify({"error": "Failed to fetch player info from server (After)"}), 500
+
+    js_after = json.loads(MessageToJson(after))
+    account_info_after = js_after.get("AccountInfo")
+    if not account_info_after:
+        return jsonify({"error": "Failed to parse updated profile data"}), 500
+
+    after_like = int(account_info_after.get("Likes", 0))
+    id_ = int(account_info_after.get("UID", uid))
+    name = str(account_info_after.get("PlayerNickname", "Unknown"))
 
     like_given = after_like - before_like
     status = 1 if like_given != 0 else 2
 
-    # Consume 1 quota for any valid result (1 or 2)
+    # Consume 1 quota for any valid result
     new_used = consume_one(api_key)
     if new_used > KEY_LIMIT:
-        # roll back if overflow (redis case)
         if USE_REDIS and r is not None:
             r.decr(usage_key(api_key))
         return jsonify({
@@ -252,8 +269,10 @@ def handle_requests():
         "UID": id_,
         "status": status,
         "remains": f"({remaining}/{KEY_LIMIT})",
-        "Credit": @RFG_GAMER
+        "Credit": "@RFG_GAMER"
     })
 
 if __name__ == "__main__":
-    app.run(debug=True, use_reloader=False)
+    HOST = os.getenv("HOST", "0.0.0.0")
+    PORT = int(os.getenv("PORT", 6290))
+    app.run(host=HOST, port=PORT, debug=True, use_reloader=False)
