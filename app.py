@@ -170,6 +170,14 @@ def make_request(encrypted, server_name, token):
     except Exception:
         return None
 
+# === Main / Home Route ===
+@app.get("/")
+def home():
+    return jsonify({
+        "status": "success",
+        "message": "RFG GAMER API is Running 24/7h 🚀⚡"
+    })
+
 # === Public remain endpoint (no key required) ===
 @app.get("/remain")
 def get_remain():
@@ -274,5 +282,5 @@ def handle_requests():
 
 if __name__ == "__main__":
     HOST = os.getenv("HOST", "0.0.0.0")
-    PORT = int(os.getenv("PORT", 6290))
+    PORT = int(os.getenv("PORT", 6291))
     app.run(host=HOST, port=PORT, debug=True, use_reloader=False)
